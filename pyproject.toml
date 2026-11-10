@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobs-gpt"
+version = "0.1.0"
+description = "Configurable Playwright job application runner with evidence-backed Gemini drafts"
+requires-python = ">=3.9"
+dependencies = ["playwright>=1.45,<2", "pypdf>=6,<7"]
+
+[project.scripts]
+jobs-gpt = "jobs_gpt.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

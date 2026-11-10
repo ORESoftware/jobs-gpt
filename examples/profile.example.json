@@ -1,0 +1,13 @@
+{
+  "resume_file": "resume.pdf",
+  "fields": {
+    "full_name": "Example Applicant",
+    "first_name": "Example",
+    "last_name": "Applicant",
+    "email": "applicant@example.org",
+    "phone": "+12025550123",
+    "city": "Your actual work city"
+  },
+  "facts": {},
+  "preferences": {}
+}

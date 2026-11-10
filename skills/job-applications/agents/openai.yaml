@@ -1,0 +1,4 @@
+interface:
+  display_name: "Job Applications"
+  short_description: "Apply through browsers with verified applicant facts"
+  default_prompt: "Use $job-applications to find eligible jobs, complete applications with jobs-gpt, and report receipts and open blockers."
