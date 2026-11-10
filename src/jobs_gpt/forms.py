@@ -65,7 +65,7 @@ DISCOVER = r"""() => {
    let l = label(e);
    if (e.type === 'file' && /^(resume|cv)$/i.test(e.id || e.name || '')) l = 'Resume';
    if (e.type === 'file' && /cover.?letter/i.test(e.id || e.name || '')) l = 'Cover letter';
-   const kind = e.matches('button[aria-pressed]') ? 'toggle' : ['combobox','checkbox'].includes(e.getAttribute('role')) ? e.getAttribute('role') : (e.type || (e.isContentEditable ? 'contenteditable' : e.tagName.toLowerCase()));
+   const kind = e.matches('button[aria-pressed]') ? 'toggle' : (e.getAttribute('aria-autocomplete') ? 'combobox' : ['combobox','checkbox'].includes(e.getAttribute('role')) ? e.getAttribute('role') : (e.type || (e.isContentEditable ? 'contenteditable' : e.tagName.toLowerCase())));
    const selected = txt(group?.querySelector('[class*=singleValue], [class*=SingleValue], .select__single-value'));
    let value = kind === 'toggle' ? txt(e.parentElement.querySelector('button[aria-pressed=true]')) : e.type === 'file' ? [...(e.files||[])].map(f=>f.name).join(', ') :
        ['checkbox','radio'].includes(e.type) ? (e.checked ? (e.value || 'true') : '') :
@@ -87,7 +87,7 @@ DISCOVER = r"""() => {
    return {id:e.dataset.jpId, label:l, question:groupLabel || l, kind, required, value, group_satisfied:groupSatisfied, name:e.name||'',
        invalid:e.getAttribute('aria-invalid')==='true' || (!!e.willValidate && !e.validity.valid),
        options:kind === 'toggle' ? [...e.parentElement.querySelectorAll('button[aria-pressed]')].map(txt) : e.tagName==='SELECT' ? [...e.options].filter(o=>!o.disabled && o.value).map(o=>o.text.trim()) : [],
-       autocomplete:e.autocomplete||'', multiple:!!e.multiple};
+       autocomplete:e.autocomplete||'', multiple:!!e.multiple, selection_verified:kind!=='combobox' || !!selected || (e.dataset.jpChoice!==undefined && e.dataset.jpChoiceValue===(e.value||''))};
  });
 }"""
 
@@ -215,6 +215,15 @@ def set_value(scope, field, value):
         if options.count() != 1:
             raise ValueError("Dropdown option is ambiguous")
         options.click(timeout=3000)
+        # Keep proof of an actual option click for widgets that render their chosen
+        # value only in the input. Subsequent edits revoke that proof.
+        el.evaluate(
+            """(e, choice) => {
+          e.dataset.jpChoice=choice; e.dataset.jpChoiceValue=e.value||'';
+          if(!e.__jpChoiceListener){e.addEventListener('input',()=>{delete e.dataset.jpChoice;delete e.dataset.jpChoiceValue;});e.__jpChoiceListener=true;}
+        }""",
+            str(value),
+        )
         # Merely typing in a search input is never proof of a selected option.
         el.press("Tab")
         selected = el.evaluate(
@@ -313,6 +322,8 @@ def blockers(scope, actions, reviewed=False, ignore_form_errors=False):
         return norm(value) == norm(f["value"])
 
     for f in fields:
+        if f["kind"] == "combobox" and f["value"] and not f.get("selection_verified"):
+            issues.append("Dropdown choice not verified: " + f["label"])
         if f["required"] and not f["value"] and not f.get("group_satisfied"):
             issues.append("Required: " + f.get("question", f["label"]))
         elif f["value"] and f["invalid"]:

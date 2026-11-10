@@ -455,6 +455,24 @@ class BrowserTests(Workspace):
                 self.assertEqual(result["status"], "submitted", result)
                 self.assertTrue(page.is_closed())
 
+    def test_typed_autocomplete_is_not_a_selected_option(self):
+        self.html = '<label for=loc>Location</label><input id=loc role=combobox value="United States">'
+        self.page.goto(URL)
+        fields = forms.discover(self.page.main_frame)
+        self.assertFalse(fields[0]["selection_verified"])
+        issues = forms.blockers(
+            self.page.main_frame,
+            [
+                {
+                    "field": "Location",
+                    "field_id": fields[0]["id"],
+                    "value": "United States",
+                    "source": "verified_answer",
+                }
+            ],
+        )
+        self.assertIn("Dropdown choice not verified: Location", issues)
+
     def test_wrong_resume_does_not_become_trusted(self):
         self.html = self.form()
         self.page.goto(URL)
