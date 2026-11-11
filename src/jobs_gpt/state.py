@@ -1,11 +1,12 @@
 """Transactional local ledger. Submission intent survives process crashes."""
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
-from pathlib import Path
 
 from .models import now
+from .privacy import private_directory
 
 STOP = {
     "submitted",
@@ -14,27 +15,34 @@ STOP = {
     "captcha_blocked",
     "application_limit",
 }
-ALLOWED_ATTEMPTS = {
-    "preview",
-    "needs_review",
-    "drafted",
-    "validation_rejected",
-    "ready",
-}
+ALLOWED_ATTEMPTS = {"ready"}
 
 
 class Store:
     def __init__(self, workspace):
-        self.root = Path(workspace).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root = private_directory(workspace)
+        if os.name != "nt" and self.root.stat().st_mode & 0o077:
+            raise ValueError(
+                "Workspace must have permissions 0700; use a dedicated private directory"
+            )
         self.path = self.root / "applications.sqlite3"
+        if self.path.is_symlink():
+            raise ValueError("Ledger must not be a symlink")
         with self.connect() as con:
             con.executescript("""PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS applications(job_key TEXT PRIMARY KEY,status TEXT NOT NULL,payload TEXT NOT NULL,updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,job_key TEXT NOT NULL,event TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL);""")
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(str(self.path), timeout=30)
+        con = sqlite3.connect(str(self.path), timeout=30)
+        if os.name != "nt":
+            os.chmod(self.path, 0o600)
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
 
     def get(self, key):
         with self.connect() as con:
@@ -55,12 +63,29 @@ class Store:
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute(
-                "SELECT status FROM applications WHERE job_key=?", (key,)
+                "SELECT status,payload FROM applications WHERE job_key=?", (key,)
             ).fetchone()
+            if payload["status"] in ("submitted", "submitting", "unconfirmed") and (
+                not row or row[0] != payload["status"]
+            ):
+                raise ValueError(
+                    "Submission states require an intent or outcome, never put()"
+                )
             if row and row[0] in STOP and payload["status"] != row[0]:
                 raise ValueError(
                     "Protected submission state requires outcome evidence, not an automatic retry"
                 )
+            if row and row[0] in STOP:
+                prior = json.loads(row[1])
+                payload = dict(prior, **payload)
+                for field in (
+                    "submit_attempt_at",
+                    "confirmation_before",
+                    "outcome_evidence",
+                    "confirmation",
+                ):
+                    if field in prior:
+                        payload[field] = prior[field]
             con.execute(
                 "INSERT INTO applications VALUES(?,?,?,?) ON CONFLICT(job_key) DO UPDATE SET status=excluded.status,payload=excluded.payload,updated_at=excluded.updated_at",
                 (key, payload["status"], json.dumps(payload), payload["updated_at"]),
@@ -94,20 +119,19 @@ class Store:
         return True
 
     def outcome(self, key, payload, evidence):
-        if not evidence:
+        if not isinstance(evidence, dict) or not evidence:
             raise ValueError("An outcome needs concrete evidence")
         if payload["status"] not in (
             "submitted",
             "unconfirmed",
             "captcha_blocked",
             "application_limit",
-            "validation_rejected",
         ):
             raise ValueError("Invalid submission outcome")
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute(
-                "SELECT status FROM applications WHERE job_key=?", (key,)
+                "SELECT status,payload FROM applications WHERE job_key=?", (key,)
             ).fetchone()
             if not row or row[0] not in STOP:
                 raise ValueError(
@@ -115,7 +139,14 @@ class Store:
                 )
             if row[0] == "submitted" and payload["status"] != "submitted":
                 raise ValueError("Confirmed submissions cannot be downgraded")
-            value = dict(payload, outcome_evidence=evidence, updated_at=now())
+            if payload["status"] == "submitted" and not evidence.get("receipt"):
+                raise ValueError("Confirmed outcome requires a receipt")
+            prior = json.loads(row[1])
+            value = dict(prior, **payload)
+            for field in ("submit_attempt_at", "confirmation_before"):
+                if field in prior:
+                    value[field] = prior[field]
+            value.update(outcome_evidence=evidence, updated_at=now())
             con.execute(
                 "UPDATE applications SET status=?,payload=?,updated_at=? WHERE job_key=?",
                 (value["status"], json.dumps(value), value["updated_at"], key),
@@ -136,8 +167,9 @@ class Store:
 
 @contextmanager
 def workspace_lock(workspace):
-    path = Path(workspace) / ".runner.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = private_directory(workspace) / ".runner.lock"
+    if path.is_symlink():
+        raise ValueError("Workspace lock must not be a symlink")
     with path.open("a+b") as handle:
         try:
             if __import__("os").name == "nt":

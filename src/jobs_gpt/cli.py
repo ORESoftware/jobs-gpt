@@ -7,6 +7,7 @@ from collections import Counter
 from pathlib import Path
 
 from .models import job_key, read_jobs, read_json, read_profile, validate_real_applicant
+from .privacy import private_path, write_private
 from .state import Store, workspace_lock
 
 
@@ -62,8 +63,63 @@ def main(argv=None):
         help="Preserve prior receipts/uncertainty from a private pilot ledger",
     )
     migrate.add_argument("--tracker", required=True)
+    check = sub.add_parser(
+        "doctor", help="Read-only environment, privacy and ledger preflight"
+    )
+    check.add_argument("--profile")
+    check.add_argument(
+        "--browser",
+        action="store_true",
+        help="Also check local browser identity without opening tabs",
+    )
+    eligibility = sub.add_parser(
+        "review-eligibility", help="Record an actual job-specific eligibility review"
+    )
+    for name in ("jobs", "profile", "job-key", "evidence", "source-url", "reviewer"):
+        eligibility.add_argument("--" + name, required=True)
     args = parser.parse_args(argv)
     try:
+        if args.command == "doctor":
+            from .checks import doctor
+
+            result = doctor(args.workspace, args.profile, args.browser)
+            print(json.dumps(result, indent=2))
+            if not result["ok"]:
+                parser.exit(1)
+            return
+        if args.command == "review-eligibility":
+            from urllib.parse import urlparse
+
+            from .models import now
+
+            profile = read_profile(args.profile)
+            jobs = read_jobs(args.jobs)
+            job = next((j for j in jobs if job_key(j) == args.job_key), None)
+            if not job or not args.evidence.strip() or not args.reviewer.strip():
+                raise ValueError("Matching job, evidence and reviewer are required")
+            source = urlparse(args.source_url)
+            if (
+                source.scheme != "https"
+                or not source.hostname
+                or source.username
+                or source.password
+            ):
+                raise ValueError(
+                    "Eligibility evidence needs an HTTPS employer source URL"
+                )
+            job["eligibility"] = {
+                "verified": True,
+                "job_key": job_key(job),
+                "reviewed_by": args.reviewer,
+                "evidence": args.evidence,
+                "source_url": args.source_url,
+                "checked_at": now(),
+                "profile_digest": profile["_profile_digest"],
+                "resume_sha256": profile["_resume_sha256"],
+            }
+            write_private(args.jobs, jobs)
+            print("Job-specific eligibility review recorded.")
+            return
         if args.command == "discover":
             from .discovery import collect
 
@@ -122,7 +178,7 @@ def main(argv=None):
             }
             output = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
             if args.output:
-                Path(args.output).write_text(output)
+                write_private(args.output, report)
             else:
                 print(output)
             return
@@ -184,7 +240,7 @@ def main(argv=None):
             return
         from playwright.sync_api import sync_playwright
 
-        from .browser import local_endpoint, start
+        from .browser import local_endpoint, start, version
 
         if args.command == "browser":
             with workspace_lock(args.workspace), sync_playwright() as pw:
@@ -202,16 +258,16 @@ def main(argv=None):
             jobs = [j for j in jobs if job_key(j) == args.only]
         if not jobs:
             raise ValueError("No jobs match this run")
-        bank = read_json(args.answers) if args.answers else []
+        bank = read_json(private_path(args.answers)) if args.answers else []
         from .runner import process
 
         with workspace_lock(args.workspace), sync_playwright() as pw:
-            endpoint = (
-                local_endpoint(args.endpoint)
+            socket = (
+                version(local_endpoint(args.endpoint))["webSocketDebuggerUrl"]
                 if args.endpoint
-                else start(pw, args.workspace)["endpoint"]
+                else start(pw, args.workspace)["websocket"]
             )
-            browser = pw.chromium.connect_over_cdp(endpoint)
+            browser = pw.chromium.connect_over_cdp(socket)
             if not browser.contexts:
                 raise RuntimeError("CDP browser has no persistent context")
             for job in jobs:

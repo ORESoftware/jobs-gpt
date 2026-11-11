@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jobs-gpt"
-version = "0.1.0"
+version = "0.2.0"
 description = "Configurable Playwright job application runner with evidence-backed Gemini drafts"
 requires-python = ">=3.9"
 dependencies = ["playwright>=1.45,<2", "pypdf>=6,<7"]

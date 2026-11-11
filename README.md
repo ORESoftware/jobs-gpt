@@ -37,11 +37,15 @@ jobs-gpt --workspace /private/state browser
 jobs-gpt --workspace /private/state run --jobs /private/jobs.json --profile /private/profile.json
 ```
 
+Run `jobs-gpt --workspace /private/state doctor --profile /private/profile.json` for a read-only preflight. Add `--browser` only when a workspace browser is already running; it checks identity without opening tabs.
+
 After reviewing the live job against the applicant's actual location, work authorization, qualifications and preferences, add an eligibility object to that job:
 
 ```json
 {
   "verified": true,
+  "job_key": "ats:board:posting-id",
+  "resume_sha256": "_resume_sha256 from fingerprint",
   "reviewed_by": "reviewing human or agent",
   "evidence": "Specific location/qualification evidence from the posting and applicant facts",
   "source_url": "https://the.actual.job/posting",
@@ -49,6 +53,16 @@ After reviewing the live job against the applicant's actual location, work autho
   "profile_digest": "_profile_digest from fingerprint"
 }
 ```
+
+Prefer recording the review with the CLI, which binds it to the correct job and source fingerprints:
+
+```bash
+jobs-gpt review-eligibility --jobs /private/jobs.json --profile /private/profile.json \
+  --job-key 'ats:board:posting-id' --evidence 'Actual reviewed eligibility evidence' \
+  --source-url 'https://the.actual.job/posting' --reviewer 'Reviewer'
+```
+
+This records your review; it does not perform or certify the reasoning for you. Old eligibility entries missing the job/PDF bindings need a fresh review.
 
 Eligibility reviews expire after 24 hours and are invalidated by profile changes. The script checks review completeness/freshness, not the reviewer's reasoning. A competent human or agent must actually verify the evidence. Jobs remain open when eligibility is unverified. JSON jobs require `company`, `role`, `url`; the other discovery fields are evidence for that review.
 
@@ -81,11 +95,11 @@ jobs-gpt --workspace /private/state run --jobs /private/jobs.json \
   --profile /private/profile.json --answers /private/answers.json --submit
 ```
 
-The final click requires verified eligibility, verified current values and PDF bytes, no unresolved required fields or visible errors, and exactly one enabled submit control. A SQLite transaction records intent **before** clicking. A fresh receipt plus disappearance of the submit control confirms success; a screenshot and receipt are retained before closing the tab. An HTTP 200 or click alone is insufficient.
+The final click requires verified eligibility, verified current values and PDF bytes, no unresolved required fields or visible errors, and exactly one enabled submit control. A SQLite transaction records intent **before** clicking. A fresh standalone receipt plus disappearance of the submit and contact/upload controls confirms success; a screenshot and receipt are retained before closing the tab. An HTTP 200 or click alone is insufficient.
 
-Unconfirmed attempts, crashes after intent, CAPTCHAs and employer frequency limits are protected from automatic retry. Re-running inspects protected tabs without editing/clicking. Completing a CAPTCHA may itself send the application: inspect for a receipt first. The initial release deliberately has no generic override to retry protected records. Resolve these individually with employer evidence; retain the original ledger/event history. Do not delete state to evade limits or retry uncertainty.
+Unconfirmed attempts, crashes after intent, CAPTCHAs and employer frequency limits are protected from automatic retry. Re-running inspects protected tabs without editing/clicking. Automatic recovery compares the receipt with its persisted pre-submit baseline; legacy unknown attempts without a baseline require manual reconciliation. A tab-close failure records a cleanup error and preserves the confirmed receipt. Completing a CAPTCHA may itself send the application: inspect for a receipt first. The initial release deliberately has no generic override to retry protected records. Resolve these individually with employer evidence; retain the original ledger/event history. Do not delete state to evade limits or retry uncertainty.
 
-`--only 'ats:board:posting-id'` targets one job. `--endpoint http://127.0.0.1:PORT` attaches to an explicitly chosen existing Chromium CDP browser. Prefer the dedicated workspace browser, never your daily browsing profile. CDP is loopback-only; treat the browser profile as sensitive. Keep one controller/workspace; workspace locks and atomic submission intents prevent local duplicate clicks. Separate workspaces cannot deduplicate each other.
+`--only 'ats:board:posting-id'` targets one job. `--endpoint http://127.0.0.1:PORT` attaches to an explicitly chosen existing Chromium CDP browser. Prefer the dedicated workspace browser, never your daily browsing profile. CDP is loopback-only; treat the browser profile as sensitive. Workspace metadata pins its debugging socket identity, so an unrelated browser on a recycled port is rejected. An old metadata file without an identity needs explicit inspection/attachment; it is never silently trusted. Keep one controller/workspace; workspace locks and atomic submission intents prevent local duplicate clicks. Separate workspaces cannot deduplicate each other.
 
 The runner disconnects without closing Chromium. To restore after an OS/browser restart, rerun: previously unresolved jobs open new background tabs while submission uncertainty stays protected. Existing unknown answers are never automatically trusted.
 
@@ -105,9 +119,17 @@ python -m unittest discover -s tests -v
 
 Tests route synthetic HTTPS ATS pages locally. No employer applications or Gemini inference are performed by CI. Coverage includes résumé byte verification, approved/unknown screening answers, receipt-only closure, CAPTCHA/limit stops, uncertain retry protection, duplicate-intent transactions, review invalidation and publication-date filtering. Add a realistic local fixture when changing a selector/control; never use real applicant data in fixtures. Generic controls are intentionally conservative.
 
-The reusable Codex skill is in `skills/job-applications/`. Copy that directory into `~/.codex/skills/`, then invoke `$job-applications`. Keep the package installed or the checkout discoverable. The skill contains no applicant secrets or machine-specific paths.
+The reusable Codex skill is in `skills/job-applications/`. Install both reusable skills and machine-local path hints with:
 
-Private data belongs outside Git. The ignore rules are a second line of defense, not a substitute for inspecting `git diff --cached` before publishing. Reports and screenshots contain personal information. This repository intentionally contains no applicant profile, résumé, key, browser storage or live application ledger.
+```bash
+.venv/bin/python scripts/install_skills.py --workspace /private/state
+```
+
+Invoke `$job-applications` to operate applications, or `$jobs-gpt-maintenance` to audit/repair the scripts and skills. The application skill includes a resolver (`scripts/jobs_gpt.py`) for environments where the CLI is not on PATH. The local-only `runtime.json` stores checkout/workspace paths; it never contains keys or applicant facts. Keep the package installed or the checkout discoverable. The skill contains no applicant secrets or machine-specific paths.
+
+See [hardening findings and validation](docs/HARDENING.md) for the audit scope and remaining limits.
+
+Private data belongs outside Git. Private runtime inputs and outputs are rejected inside Git checkouts. New workspaces use mode 0700 and the ledger, answer bank and metadata use 0600 on POSIX systems. Existing permissive workspaces must be corrected explicitly; the script never changes permissions of an arbitrary existing parent directory. JSON updates use a temporary file and atomic replacement, so a failed write preserves the previous record.  The ignore rules are a second line of defense, not a substitute for inspecting `git diff --cached` before publishing. Reports and screenshots contain personal information. This repository intentionally contains no applicant profile, résumé, key, browser storage or live application ledger.
 
 ## Upstream references
 

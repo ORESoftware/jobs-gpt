@@ -283,6 +283,15 @@ def fill(scope, profile, resume, answers, job, actions):
             )
 
 
+def equivalent_value(field, expected):
+    if expected is None:
+        return False
+    if field["kind"] == "tel":
+        digits = re.sub(r"\D", "", str(expected))
+        return bool(digits) and digits == re.sub(r"\D", "", str(field["value"]))
+    return norm(expected) == norm(field["value"])
+
+
 def blockers(scope, actions, reviewed=False, ignore_form_errors=False):
     issues = []
     human_challenges = scope.locator(
@@ -314,13 +323,6 @@ def blockers(scope, actions, reviewed=False, ignore_form_errors=False):
         for f in fields
     }
 
-    def same_value(f, value):
-        if value is None:
-            return False
-        if f["kind"] == "tel":
-            return re.sub(r"\D", "", str(value)) == re.sub(r"\D", "", str(f["value"]))
-        return norm(value) == norm(f["value"])
-
     for f in fields:
         if f["kind"] == "combobox" and f["value"] and not f.get("selection_verified"):
             issues.append("Dropdown choice not verified: " + f["label"])
@@ -328,10 +330,11 @@ def blockers(scope, actions, reviewed=False, ignore_form_errors=False):
             issues.append("Required: " + f.get("question", f["label"]))
         elif f["value"] and f["invalid"]:
             issues.append("Invalid: " + f["label"])
-        verified = same_value(f, trusted.get(f["id"])) or (
+        verified = equivalent_value(f, trusted.get(f["id"])) or (
             label_counts[norm(f["label"])] == 1
             and any(
-                norm(a["field"]) == norm(f["label"]) and same_value(f, a.get("value"))
+                norm(a["field"]) == norm(f["label"])
+                and equivalent_value(f, a.get("value"))
                 for a in approved
             )
         )
@@ -370,7 +373,26 @@ def submit_buttons(scope):
 
 def confirmation(scope):
     body = scope.locator("body").inner_text(timeout=5000)
-    return [m.group(0) for m in CONFIRM.finditer(body)]
+    receipts = []
+    for line in body.splitlines():
+        sentence = re.split(r"[.!](?:\s|$)", line.strip(), maxsplit=1)[0].strip()
+        if CONFIRM.fullmatch(sentence):
+            receipts.append(sentence)
+    return receipts
+
+
+def receipt_ready(scope):
+    buttons = submit_buttons(scope)
+    if any(buttons.nth(i).is_visible() for i in range(buttons.count())):
+        return False
+    # A hidden/removed Submit button alone can be a loading state. Contact/upload
+    # application controls must also disappear before accepting the receipt.
+    return not any(
+        f["kind"] in ("email", "file")
+        or norm(f["label"])
+        in ("email", "email address", "full name", "first name", "last name")
+        for f in discover(scope)
+    )
 
 
 def confirmation_after(scope, before, timeout=12000):
@@ -388,7 +410,7 @@ def confirmation_after(scope, before, timeout=12000):
                 for m in messages
                 if m.casefold() not in {s.casefold() for s in before}
             ]
-            if fresh and not active:
+            if fresh and not active and receipt_ready(scope):
                 return fresh[0]
         except Exception:
             pass

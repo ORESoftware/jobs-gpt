@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jobs GPT Maintenance"
+  short_description: "Audit and harden reusable application automation"
+  default_prompt: "Use $jobs-gpt-maintenance to audit jobs-gpt, fix verified defects, test recovery and privacy, and refresh its skills."

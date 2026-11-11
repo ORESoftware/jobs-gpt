@@ -7,7 +7,9 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import urlparse
-from urllib.request import urlopen
+
+from .network import open_no_redirect
+from .privacy import private_directory, write_private
 
 
 def local_endpoint(endpoint):
@@ -17,22 +19,55 @@ def local_endpoint(endpoint):
         or parsed.hostname not in ("127.0.0.1", "localhost")
         or parsed.username
         or parsed.password
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or not parsed.port
     ):
         raise ValueError("CDP endpoint must be an HTTP loopback address")
     return endpoint.rstrip("/")
 
 
+def version(endpoint):
+    endpoint = local_endpoint(endpoint)
+    with open_no_redirect(endpoint + "/json/version", timeout=2) as response:
+        info = json.load(response)
+    ws = urlparse(info.get("webSocketDebuggerUrl", ""))
+    http = urlparse(endpoint)
+    if (
+        ws.scheme != "ws"
+        or ws.hostname not in ("127.0.0.1", "localhost")
+        or ws.port != http.port
+        or ws.username
+        or ws.password
+    ):
+        raise ValueError("CDP returned an unexpected debugging socket")
+    return info
+
+
 def start(pw, workspace, port=0):
-    root = Path(workspace).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    root = private_directory(workspace)
     metadata = root / "browser.json"
     if metadata.exists():
         data = json.loads(metadata.read_text())
+        if (
+            Path(data.get("profile", "")).resolve()
+            != (root / "browser-profile").resolve()
+        ):
+            raise RuntimeError("Browser metadata belongs to a different workspace")
         try:
-            with urlopen(local_endpoint(data["endpoint"]) + "/json/version", timeout=2):
-                return data
+            info = version(data["endpoint"])
         except OSError:
-            pass
+            info = None
+        if info:
+            if (
+                not data.get("websocket")
+                or data["websocket"] != info["webSocketDebuggerUrl"]
+            ):
+                raise RuntimeError(
+                    "Browser endpoint identity changed; inspect the browser before explicit attachment"
+                )
+            return data
     if not port:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -68,9 +103,10 @@ def start(pw, workspace, port=0):
     }
     for _ in range(50):
         try:
-            with urlopen(data["endpoint"] + "/json/version", timeout=1):
-                metadata.write_text(json.dumps(data, indent=2) + "\n")
-                return data
+            info = version(data["endpoint"])
+            data["websocket"] = info["webSocketDebuggerUrl"]
+            write_private(metadata, data)
+            return data
         except OSError:
             time.sleep(0.2)
     raise RuntimeError(

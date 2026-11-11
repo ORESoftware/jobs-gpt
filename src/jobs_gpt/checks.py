@@ -1,0 +1,75 @@
+"""Read-only preflight and local ledger consistency diagnostics."""
+
+import json
+import os
+import sqlite3
+import sys
+from collections import Counter
+from importlib.metadata import version
+
+from .models import read_profile
+from .privacy import private_path
+
+
+def doctor(workspace, profile=None, check_browser=False):
+    root = private_path(workspace)
+    errors = []
+    result = {
+        "python": sys.version.split()[0],
+        "dependencies": {
+            name: version(name) for name in ("jobs-gpt", "playwright", "pypdf")
+        },
+        "workspace_exists": root.exists(),
+        "gemini_key_present": bool(
+            os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        ),
+        "gemini_model_configured": bool(os.environ.get("GEMINI_MODEL")),
+    }
+    if root.exists() and os.name != "nt" and root.stat().st_mode & 0o077:
+        errors.append(
+            "Workspace permissions should be 0700; use a dedicated private directory"
+        )
+    path = root / "applications.sqlite3"
+    if path.exists():
+        con = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+        try:
+            integrity = con.execute("PRAGMA quick_check").fetchone()[0]
+            if integrity != "ok":
+                errors.append("SQLite integrity check failed")
+            rows = con.execute(
+                "SELECT job_key,status,payload FROM applications"
+            ).fetchall()
+            for _, status, payload in rows:
+                record = json.loads(payload)
+                if record.get("status") != status:
+                    errors.append("Ledger status/payload mismatch")
+                if status == "submitted" and not (
+                    record.get("confirmation")
+                    or record.get("confirmation_excerpt")
+                    or record.get("outcome_evidence", {}).get("receipt")
+                ):
+                    errors.append(
+                        "A submitted record lacks receipt evidence; reconcile manually"
+                    )
+            result["ledger"] = {
+                "integrity": integrity,
+                "records": len(rows),
+                "counts": dict(Counter(row[1] for row in rows)),
+            }
+        finally:
+            con.close()
+    if profile:
+        read_profile(profile)
+        result["profile_and_pdf_valid"] = True
+    if check_browser:
+        from .browser import version as browser_version
+
+        metadata = json.loads((root / "browser.json").read_text())
+        actual = browser_version(metadata["endpoint"])
+        matched = metadata.get("websocket") == actual["webSocketDebuggerUrl"]
+        result["browser_identity_matches"] = matched
+        if not matched:
+            errors.append("Browser endpoint identity differs from workspace metadata")
+    result["errors"] = errors
+    result["ok"] = not errors
+    return result

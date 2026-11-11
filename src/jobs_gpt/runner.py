@@ -9,6 +9,7 @@ from . import forms
 from .browser import page_for, target_id
 from .gemini import request_answers
 from .models import assert_job_url, eligibility_issues, job_key, now
+from .privacy import private_directory, private_path
 from .reviews import approved, revalidate
 from .state import STOP
 
@@ -39,8 +40,9 @@ def screenshot(page, store, key, label):
         / "screenshots"
         / (hashlib.sha256(key.encode()).hexdigest()[:16] + "-" + label + ".png")
     )
-    path.parent.mkdir(exist_ok=True)
     try:
+        path = private_path(path)
+        private_directory(path.parent)
         page.screenshot(path=str(path), full_page=True, timeout=7000)
         return str(path)
     except Exception:
@@ -86,17 +88,31 @@ def wait_quiet(page, pending, timeout=15):
     return False
 
 
+def close_receipt_tab(page, store, key, record):
+    try:
+        page.close()
+    except Exception as exc:
+        record["tab_close_error"] = type(exc).__name__
+        store.put(key, record, "receipt_tab_cleanup_failed")
+
+
 def process(context, store, job, profile, bank, submit=False, model=None):
     key = job_key(job)
     old = store.get(key) or {}
     status = old.get("status")
-    # Confirmed records remain final. Only close their recorded tab if a prior close failed.
+    # Closing a tab is cleanup, never a reason to downgrade a saved receipt.
     if status == "submitted":
-        if old.get("target_id"):
-            for page in context.pages:
-                if target_id(context, page) == old["target_id"]:
-                    assert_job_url(job, page.url)
-                    page.close()
+        for existing in context.pages:
+            if (
+                old.get("target_id")
+                and target_id(context, existing) == old["target_id"]
+            ):
+                try:
+                    assert_job_url(job, existing.url)
+                    existing.close()
+                except Exception as exc:
+                    old["tab_close_error"] = type(exc).__name__
+                    store.put(key, old, "receipt_tab_cleanup_failed")
         return old
     page = page_for(context, old.get("target_id"))
     record = dict(old, job=job, target_id=target_id(context, page), url=job["url"])
@@ -125,16 +141,39 @@ def process(context, store, job, profile, bank, submit=False, model=None):
         record["current_url"] = page.url
         receipt = forms.confirmation(scope)
         buttons = forms.submit_buttons(scope)
-        active = any(buttons.nth(i).is_visible() for i in range(buttons.count()))
         if protected:
-            if status in ("submitting", "unconfirmed") and receipt and not active:
+            # Reconcile only an observed post-intent receipt, including an embedded
+            # form or a CAPTCHA that the user completed after clicking Submit.
+            recoverable = (
+                status in ("submitting", "unconfirmed", "captcha_blocked")
+                and "confirmation_before" in old
+            )
+            if recoverable:
+                for candidate in forms.scopes(page):
+                    try:
+                        assert_job_url(job, candidate.url)
+                    except ValueError:
+                        continue
+                    fresh = [
+                        r
+                        for r in forms.confirmation(candidate)
+                        if forms.norm(r)
+                        not in {forms.norm(x) for x in old["confirmation_before"]}
+                    ]
+                    if fresh and forms.receipt_ready(candidate):
+                        scope = candidate
+                        receipt = fresh
+                        break
+                else:
+                    receipt = []
+            if recoverable and receipt and forms.receipt_ready(scope):
                 record.update(
                     status="submitted",
                     confirmation=receipt[0],
                     screenshot=screenshot(page, store, key, "receipt"),
                 )
                 store.outcome(key, record, {"receipt": receipt[0], "url": page.url})
-                page.close()
+                close_receipt_tab(page, store, key, record)
             else:
                 # Preserve uncertainty and the tab; never interpret absence of a receipt as rejection.
                 record.update(
@@ -239,6 +278,7 @@ def process(context, store, job, profile, bank, submit=False, model=None):
         store.put(key, record)
         if not submit or issues:
             return record
+        record["screenshot_before"] = screenshot(page, store, key, "before")
         # Recheck every gate immediately before intent. No final-button heuristics or AI clicks.
         assert_job_url(job, page.url)
         final = forms.blockers(
@@ -257,7 +297,7 @@ def process(context, store, job, profile, bank, submit=False, model=None):
             )
             return store.put(key, record)
         before = forms.confirmation(scope)
-        record["screenshot_before"] = screenshot(page, store, key, "before")
+        record["confirmation_before"] = before
         record["submit_attempt_at"] = now()
         if not store.begin_attempt(key, record):
             return store.get(key)
@@ -273,7 +313,7 @@ def process(context, store, job, profile, bank, submit=False, model=None):
                     blockers=[],
                 )
                 store.outcome(key, record, {"receipt": receipt, "url": page.url})
-                page.close()
+                close_receipt_tab(page, store, key, record)
                 return record
             notice = limit_notice(scope)
             if notice:

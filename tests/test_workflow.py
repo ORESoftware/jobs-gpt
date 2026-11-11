@@ -59,6 +59,8 @@ class Workspace(unittest.TestCase):
         self.job = dict(JOB)
         self.job["eligibility"] = {
             "verified": True,
+            "job_key": job_key(self.job),
+            "resume_sha256": self.profile["_resume_sha256"],
             "reviewed_by": "offline reviewer",
             "evidence": "Synthetic test eligibility",
             "source_url": URL,
@@ -408,6 +410,7 @@ class BrowserTests(Workspace):
                 job = dict(
                     self.job, url=URL.replace("89abc", "89ab1" if nested else "89ab2")
                 )
+                job["eligibility"] = dict(job["eligibility"], job_key=job_key(job))
                 self.job = job
                 self.profile["facts"] = {"notice": "Two weeks"}
                 self.profile["_profile_digest"] = digest(
@@ -448,6 +451,7 @@ class BrowserTests(Workspace):
                 page = self.context.new_page()
                 self.html = self.form()
                 job = dict(self.job, url=url)
+                job["eligibility"] = dict(job["eligibility"], job_key=job_key(job))
                 with patch("jobs_gpt.runner.page_for", return_value=page):
                     result = process(
                         self.context, self.store, job, self.profile, [], True

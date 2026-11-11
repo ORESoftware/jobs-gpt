@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .forms import HOSTS
+from .privacy import private_path
 
 
 def now():
@@ -27,7 +28,7 @@ def digest(value):
 
 
 def read_profile(path):
-    path = Path(path).resolve()
+    path = private_path(path)
     data = read_json(path)
     if not isinstance(data, dict) or not isinstance(data.get("fields"), dict):
         raise ValueError("Profile must contain a fields object")
@@ -43,6 +44,7 @@ def read_profile(path):
         raise ValueError(
             "resume_file must point to an existing PDF, relative to the profile or absolute"
         )
+    private_path(resume)
     data = dict(data)
     data["_resume_path"] = str(resume.resolve())
     data["_resume_sha256"] = hashlib.sha256(resume.read_bytes()).hexdigest()
@@ -134,6 +136,10 @@ def eligibility_issues(job, profile, max_age_hours=24):
         or not review.get("source_url")
     ):
         return ["Eligibility review needs reviewer, evidence and source URL"]
+    if review.get("job_key") != job_key(job):
+        return ["Eligibility review does not match the intended employer job"]
+    if review.get("resume_sha256") != profile["_resume_sha256"]:
+        return ["Eligibility review does not match the current resume"]
     if review.get("profile_digest") != profile["_profile_digest"]:
         return ["Eligibility review does not match the current applicant profile"]
     try:

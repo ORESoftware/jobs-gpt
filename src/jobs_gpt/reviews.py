@@ -5,8 +5,10 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from .forms import bank_answer, discover, norm, profile_value
+from .forms import bank_answer, discover, equivalent_value, norm, profile_value
 from .models import digest, job_key, now, read_json
+from .privacy import private_path, write_private
+from .state import workspace_lock
 
 
 def source_text(profile, kind):
@@ -50,6 +52,7 @@ def approved(bank, profile, job):
 
 
 def approve(path, profile, job, question, answer, source_kind, quote, reviewer):
+    path = private_path(path)
     if (
         not isinstance(answer, (str, bool, int, float, list))
         or isinstance(answer, list)
@@ -75,17 +78,18 @@ def approve(path, profile, job, question, answer, source_kind, quote, reviewer):
         "reviewed_at": now(),
     }
     entry["approval_digest"] = digest(entry)
-    bank = read_json(path) if Path(path).exists() else []
-    bank = [
-        a
-        for a in bank
-        if not (
-            a.get("job_key") == entry["job_key"]
-            and norm(a.get("question", "")) == norm(question)
-        )
-    ]
-    bank.append(entry)
-    Path(path).write_text(json.dumps(bank, indent=2, ensure_ascii=False) + "\n")
+    with workspace_lock(path.parent):
+        bank = read_json(path) if Path(path).exists() else []
+        bank = [
+            a
+            for a in bank
+            if not (
+                a.get("job_key") == entry["job_key"]
+                and norm(a.get("question", "")) == norm(question)
+            )
+        ]
+        bank.append(entry)
+        write_private(path, bank)
     return entry
 
 
@@ -112,7 +116,7 @@ def revalidate(scope, profile, answers, job):
             expected = value if value else None
         if expected is False and not value:
             continue
-        if expected is not None and norm(expected) == norm(value):
+        if expected is not None and equivalent_value(f, expected):
             actions.append(
                 {
                     "field": f["label"],
