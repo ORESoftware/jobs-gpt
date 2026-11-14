@@ -22,10 +22,11 @@ The commands below assume `jobs-gpt` is on PATH (activate the virtual environmen
 ## Find candidates
 
 ```bash
-jobs-gpt discover --boards examples/boards.example.json --days 10 --output /private/jobs.json
+jobs-gpt discover --boards examples/boards.example.json --days 10 \
+  --exclude-title 'manager|director' --output /private/jobs.json
 ```
 
-Configure your own board list. Ashby and Greenhouse discovery uses employer GET feeds; it never approves eligibility. Results are filtered by title and remote indicators, deduplicated by ATS/board/job identity, and accompanied by an audit file. Ashby `publishedAt` means last publication and may reflect republication. Greenhouse jobs without `first_published` are excluded: `updated_at` is never substituted. Remote indicators do not establish country or time-zone eligibility. Discovery does not promise a requested number of suitable jobs.
+Configure your own board list. Ashby and Greenhouse discovery uses employer GET feeds; it never approves eligibility. Results are filtered by positive `--title` and optional negative `--exclude-title` regular expressions (both case-insensitive) plus remote indicators, deduplicated by ATS/board/job identity, and accompanied by an audit file. Redirects are refused, feeds are limited to 8 MiB, and malformed entries/boards are skipped with audit errors so other employers can still be processed. The output and adjacent `.audit.json` are written atomically under a private mode-0700 directory outside any Git checkout; create that directory privately before running discovery if it already exists. Ashby `publishedAt` means last publication and may reflect republication. Greenhouse jobs without `first_published` are excluded: `updated_at` is never substituted. Remote indicators do not establish country or time-zone eligibility. Discovery does not promise a requested number of suitable jobs.
 
 Use direct HTTPS ATS URLs. Custom employer URLs must be resolved to a supported posting before adding them. Lever direct application URLs work with the runner; its discovery feed is not implemented.
 
