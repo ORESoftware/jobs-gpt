@@ -141,8 +141,7 @@ class GuardTests(Workspace):
 
     def test_atomic_intent_and_crash_protection(self):
         key = job_key(self.job)
-        record = {"status": "ready", "job": self.job}
-        self.store.put(key, record)
+        record = self.store.put(key, {"status": "ready", "job": self.job})
         self.assertTrue(self.store.begin_attempt(key, record))
         self.assertFalse(Store(self.store.root).begin_attempt(key, record))
         with self.assertRaises(ValueError):

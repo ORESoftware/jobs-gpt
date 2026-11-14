@@ -35,9 +35,10 @@ class StorageHardeningTests(Workspace):
 
     def test_submission_evidence_survives_partial_updates(self):
         key = job_key(self.job)
-        ready = {"status": "ready", "confirmation_before": []}
-        self.store.put(key, ready)
-        self.store.begin_attempt(key, ready)
+        ready = self.store.put(
+            key, {"status": "ready", "confirmation_before": []}
+        )
+        self.assertTrue(self.store.begin_attempt(key, ready))
         self.store.outcome(
             key,
             {"status": "submitted", "confirmation": "received"},
@@ -49,6 +50,97 @@ class StorageHardeningTests(Workspace):
         )
         self.assertEqual(self.store.get(key)["confirmation"], "received")
         self.assertIn("submit_attempt_at", self.store.get(key))
+
+    def test_stale_ready_revisions_fail_closed_even_with_same_timestamp(self):
+        key = job_key(self.job)
+        # Two writes within one second must still have distinct revisions.
+        with patch("jobs_gpt.state.now", return_value="2026-11-14T18:00:00+00:00"):
+            old = self.store.put(key, {"status": "ready", "job": self.job})
+            latest = self.store.put(key, {"status": "ready", "job": self.job})
+        self.assertEqual(old["updated_at"], latest["updated_at"])
+        self.assertNotEqual(old["_ready_revision"], latest["_ready_revision"])
+        self.assertFalse(self.store.begin_attempt(key, old))
+        self.assertFalse(
+            self.store.begin_attempt(
+                key, {"status": "ready", "job": self.job}
+            )
+        )
+        self.assertEqual(self.store.get(key)["status"], "ready")
+        self.assertTrue(self.store.begin_attempt(key, latest))
+        self.assertFalse(self.store.begin_attempt(key, latest))
+
+    def test_ready_snapshot_cannot_claim_different_job(self):
+        key = job_key(self.job)
+        ready = self.store.put(key, {"status": "ready", "job": self.job})
+        different = dict(ready, job=dict(self.job, url=URL.replace("89abc", "89abd")))
+        self.assertFalse(self.store.begin_attempt(key, different))
+        self.assertEqual(self.store.get(key)["status"], "ready")
+        self.assertTrue(self.store.begin_attempt(key, ready))
+
+    def test_confirmed_receipt_is_immutable_across_outcomes(self):
+        key = job_key(self.job)
+        ready = self.store.put(key, {"status": "ready", "job": self.job})
+        self.assertTrue(self.store.begin_attempt(key, ready))
+        self.store.outcome(
+            key, dict(ready, status="submitted", confirmation="received"),
+            {"receipt": "received", "url": URL},
+        )
+        before = self.store.get(key)
+        with self.assertRaisesRegex(ValueError, "cannot be rewritten"):
+            self.store.outcome(
+                key,
+                dict(ready, status="submitted", confirmation="replaced"),
+                {"receipt": "replaced"},
+            )
+        with self.assertRaises(ValueError):
+            self.store.outcome(
+                key, dict(ready, status="unconfirmed"), {"observation": "error"},
+            )
+        self.assertEqual(self.store.get(key)["confirmation"], "received")
+        self.assertEqual(self.store.get(key)["outcome_evidence"], before["outcome_evidence"])
+
+    def test_doctor_reports_malformed_records_without_disclosing_them(self):
+        from jobs_gpt.checks import doctor
+
+        key = job_key(self.job)
+        self.store.put(key, {"status": "ready", "job": self.job})
+        self.store.import_record(
+            "fixture:bad-json:1",
+            {"status": "submitted", "outcome_evidence": "not-an-object"},
+        )
+        with self.store.connect() as con:
+            con.execute(
+                "UPDATE applications SET payload=? WHERE job_key=?",
+                ("{secret: synthetic@example.invalid", key),
+            )
+        report = doctor(self.store.root)
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["ledger"]["records"], 2)
+        self.assertTrue(any("Malformed ledger record JSON" in e for e in report["errors"]))
+        self.assertTrue(any("lacks receipt" in e for e in report["errors"]))
+        self.assertNotIn("synthetic@example.invalid", json.dumps(report))
+
+    def test_doctor_rejects_symlink_and_invalid_sqlite_without_modifying_them(self):
+        from jobs_gpt.checks import doctor
+
+        unsafe = self.root / "unsafe-doctor"
+        unsafe.mkdir(mode=0o700)
+        linked = unsafe / "applications.sqlite3"
+        try:
+            linked.symlink_to(self.store.path)
+        except (OSError, NotImplementedError):
+            self.skipTest("Symlinks not supported")
+        result = doctor(unsafe)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("must not be a symlink" in e for e in result["errors"]))
+        self.assertTrue(linked.is_symlink())
+        linked.unlink()
+        linked.write_bytes(b"synthetic intentionally invalid database")
+        corrupted = doctor(unsafe)
+        self.assertFalse(corrupted["ok"])
+        self.assertEqual(corrupted["ledger"]["integrity"], "error")
+        self.assertTrue(any("unreadable or invalid" in e for e in corrupted["errors"]))
+        self.assertEqual(linked.read_bytes(), b"synthetic intentionally invalid database")
 
     def test_db_connections_are_closed(self):
         with self.store.connect() as con:
@@ -521,6 +613,24 @@ class BrowserHardeningTests(Workspace):
         result = process(self.context, self.store, self.job, self.profile, [], True)
         self.assertEqual(result["status"], "submitted")
         self.assertTrue(self.page.is_closed())
+
+    def test_concurrent_ready_replacement_before_intent_never_clicks(self):
+        self.html = self.form()
+        changed = []
+
+        def competing_write(page, store, key, label):
+            if label == "before":
+                current = store.get(key)
+                changed.append(store.put(key, current, "synthetic_concurrent_edit"))
+            return None
+
+        with patch("jobs_gpt.runner.screenshot", side_effect=competing_write):
+            result = process(self.context, self.store, self.job, self.profile, [], True)
+        self.assertEqual(result["status"], "ready", result)
+        self.assertEqual(len(changed), 1)
+        self.assertNotIn("submit_attempt_at", self.store.get(job_key(self.job)))
+        self.assertFalse(self.page.is_closed())
+        self.assertNotIn("Your application has been received", self.page.locator("body").inner_text())
 
     def test_field_change_during_screenshot_blocks_final_click(self):
         self.html = self.form()
