@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -25,6 +26,10 @@ def main():
         # hint below must not land in a pre-existing world-readable directory.
         private_directory(destination)
         shutil.copytree(repo / "skills" / name, destination, dirs_exist_ok=True)
+        # copytree copies source directory mode (often 0755) to the target.
+        # Restore the restricted mode on our managed destination before runtime write.
+        if os.name != "nt":
+            destination.chmod(0o700)
         # Preserve an existing custom workspace unless the user explicitly changes it.
         runtime = destination / "runtime.json"
         config = json.loads(runtime.read_text()) if runtime.exists() else {}
