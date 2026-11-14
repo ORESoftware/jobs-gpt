@@ -275,7 +275,9 @@ def process(context, store, job, profile, bank, submit=False, model=None):
             fields=forms.discover(scope),
             updated_at=now(),
         )
-        store.put(key, record)
+        # Keep the exact stored ready revision. A concurrent ledger update
+        # must invalidate this controller's permission to submit.
+        record = store.put(key, record)
         if not submit or issues:
             return record
         record["screenshot_before"] = screenshot(page, store, key, "before")
