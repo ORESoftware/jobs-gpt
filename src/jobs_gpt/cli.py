@@ -27,6 +27,10 @@ def main(argv=None):
     discover.add_argument(
         "--title", default=r"engineer|developer|compiler|infrastructure"
     )
+    discover.add_argument(
+        "--exclude-title",
+        help="Optional case-insensitive regex for titles to exclude from discovery",
+    )
     discover.add_argument("--include-onsite", action="store_true")
     discover.add_argument("--output", required=True)
     run = sub.add_parser("run")
@@ -120,12 +124,19 @@ def main(argv=None):
             from .discovery import collect
 
             result = collect(
-                read_json(args.boards), args.days, args.title, not args.include_onsite
+                read_json(args.boards),
+                args.days,
+                args.title,
+                not args.include_onsite,
+                exclude_title_pattern=args.exclude_title,
             )
-            Path(args.output).write_text(json.dumps(result["jobs"], indent=2) + "\n")
-            Path(str(args.output) + ".audit.json").write_text(
-                json.dumps({k: v for k, v in result.items() if k != "jobs"}, indent=2)
-                + "\n"
+            # These files will later acquire profile-bound eligibility evidence.
+            # Never write their initial discovery copies inside a Git checkout or
+            # through a permissive applicant directory.
+            write_private(args.output, result["jobs"])
+            write_private(
+                str(args.output) + ".audit.json",
+                {k: v for k, v in result.items() if k != "jobs"},
             )
             print(
                 json.dumps(
