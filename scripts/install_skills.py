@@ -6,7 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
-from jobs_gpt.privacy import write_private
+from jobs_gpt.privacy import private_directory, write_private
 
 
 def main():
@@ -21,6 +21,9 @@ def main():
     repo = Path(__file__).resolve().parents[1]
     for name in ("job-applications", "jobs-gpt-maintenance"):
         destination = args.destination / name
+        # Create the skill directory privately before copying files. The runtime
+        # hint below must not land in a pre-existing world-readable directory.
+        private_directory(destination)
         shutil.copytree(repo / "skills" / name, destination, dirs_exist_ok=True)
         # Preserve an existing custom workspace unless the user explicitly changes it.
         runtime = destination / "runtime.json"
