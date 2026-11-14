@@ -26,28 +26,44 @@ def doctor(workspace, profile=None, check_browser=False):
         ),
         "gemini_model_configured": bool(os.environ.get("GEMINI_MODEL")),
     }
-    if root.exists() and os.name != "nt" and root.stat().st_mode & 0o077:
+    if root.exists() and not root.is_dir():
+        errors.append("Workspace path is not a directory")
+    elif root.exists() and os.name != "nt" and root.stat().st_mode & 0o077:
         errors.append(
             "Workspace permissions should be 0700; use a dedicated private directory"
         )
     path = root / "applications.sqlite3"
-    if path.exists():
-        con = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+    if path.is_symlink():
+        errors.append("Ledger must not be a symlink; inspect without following it")
+    elif path.exists():
+        con = None
         try:
+            # No ledger writes, repairs, or implicit migrations during doctor.
+            con = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
             integrity = con.execute("PRAGMA quick_check").fetchone()[0]
             if integrity != "ok":
-                errors.append("SQLite integrity check failed")
+                errors.append("SQLite integrity check failed; reconcile manually")
             rows = con.execute(
                 "SELECT job_key,status,payload FROM applications"
             ).fetchall()
             for _, status, payload in rows:
-                record = json.loads(payload)
+                try:
+                    record = json.loads(payload)
+                except (ValueError, TypeError):
+                    errors.append("Malformed ledger record JSON; reconcile manually")
+                    continue
+                if not isinstance(record, dict):
+                    errors.append("Ledger record is not an object; reconcile manually")
+                    continue
                 if record.get("status") != status:
                     errors.append("Ledger status/payload mismatch")
+                evidence = record.get("outcome_evidence")
+                if not isinstance(evidence, dict):
+                    evidence = {}
                 if status == "submitted" and not (
                     record.get("confirmation")
                     or record.get("confirmation_excerpt")
-                    or record.get("outcome_evidence", {}).get("receipt")
+                    or evidence.get("receipt")
                 ):
                     errors.append(
                         "A submitted record lacks receipt evidence; reconcile manually"
@@ -61,8 +77,19 @@ def doctor(workspace, profile=None, check_browser=False):
                     counts.get(status, 0) for status in STOP - {"submitted"}
                 ),
             }
+        except (sqlite3.DatabaseError, OSError):
+            # Avoid a raw SQLite traceback or accidentally printing applicant
+            # payloads when a ledger is corrupt or has an unknown schema.
+            errors.append("Ledger is unreadable or invalid; reconcile manually")
+            result["ledger"] = {
+                "integrity": "error",
+                "records": None,
+                "counts": {},
+                "protected_unresolved": None,
+            }
         finally:
-            con.close()
+            if con is not None:
+                con.close()
     if profile:
         read_profile(profile)
         result["profile_and_pdf_valid"] = True
