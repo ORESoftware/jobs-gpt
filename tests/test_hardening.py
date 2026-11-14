@@ -394,5 +394,55 @@ class BrowserHardeningTests(Workspace):
         self.assertNotIn("submit_attempt_at", self.store.get(job_key(self.job)))
 
 
+    def test_embedded_job_switch_during_screenshot_blocks_click(self):
+        embedded = URL + "?embedded=1"
+        different_job = URL.replace("89abc", "89abd") + "?embedded=1"
+        self.context.unroute("**/*")
+        self.context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=(
+                    self.form()
+                    if "embedded=1" in route.request.url
+                    else '<iframe id="application" src="' + embedded + '"></iframe>'
+                ),
+            ),
+        )
+
+        def switched(*args):
+            frame = next(
+                f for f in self.page.frames if f != self.page.main_frame
+            )
+            frame.evaluate(
+                "(url) => history.replaceState(null, '', url)", different_job
+            )
+            self.assertEqual(frame.url, different_job)
+            return None
+
+        with patch("jobs_gpt.runner.screenshot", side_effect=switched):
+            result = process(self.context, self.store, self.job, self.profile, [], True)
+        self.assertEqual(result["status"], "needs_review", result)
+        self.assertFalse(self.page.is_closed())
+        self.assertNotIn("submit_attempt_at", self.store.get(job_key(self.job)))
+
+    def test_receipt_after_job_identity_change_is_unconfirmed(self):
+        different_job = URL.replace("89abc", "89abd")
+        self.html = self.form().replace(
+            "document.body.innerHTML='Your application has been received'",
+            "history.replaceState(null, '', '"
+            + different_job
+            + "');document.body.innerHTML='Your application has been received'",
+        )
+        result = process(self.context, self.store, self.job, self.profile, [], True)
+        self.assertEqual(result["status"], "unconfirmed", result)
+        self.assertFalse(self.page.is_closed())
+        saved = self.store.get(job_key(self.job))
+        self.assertEqual(saved["status"], "unconfirmed")
+        self.assertIn("submit_attempt_at", saved)
+        self.assertNotIn("confirmation", saved)
+
+
 if __name__ == "__main__":
     unittest.main()
