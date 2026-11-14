@@ -82,7 +82,7 @@ class StorageHardeningTests(Workspace):
 
     def test_endpoint_reuse_requires_same_browser_identity(self):
         root = self.root / "browser"
-        root.mkdir()
+        root.mkdir(mode=0o700)
         write_private(
             root / "browser.json",
             {
@@ -248,6 +248,12 @@ class StorageHardeningTests(Workspace):
         for name in ("job-applications", "jobs-gpt-maintenance"):
             config = json.loads((destination / name / "runtime.json").read_text())
             self.assertEqual(config["workspace"], str(custom.resolve()))
+            if os.name != "nt":
+                self.assertEqual((destination / name).stat().st_mode & 0o777, 0o700)
+                self.assertEqual(
+                    (destination / name / "runtime.json").stat().st_mode & 0o777,
+                    0o600,
+                )
 
     def test_public_scan_checks_staged_blobs_including_ignored_files(self):
         import subprocess
