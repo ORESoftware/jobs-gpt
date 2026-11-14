@@ -19,6 +19,13 @@ def private_path(path):
 def private_directory(path):
     path = private_path(path)
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # mkdir(mode=0700) does not harden an already existing directory.
+    # Refuse to expose applicant records in a pre-existing shared directory.
+    if os.name != "nt" and path.stat().st_mode & 0o077:
+        raise ValueError(
+            "Private artifact directory must have permissions 0700; "
+            "fix existing permissions explicitly"
+        )
     return path
 
 
