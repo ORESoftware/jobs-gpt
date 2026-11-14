@@ -202,6 +202,117 @@ class GuardTests(Workspace):
         self.assertFalse(result["jobs"][0]["eligibility"]["verified"])
         self.assertEqual(len(result["errors"]), 1)
 
+    def test_discovery_skips_malformed_feeds_and_excludes_titles(self):
+        current = dt.datetime(2026, 11, 10, tzinfo=dt.timezone.utc)
+        published = "2026-11-09T12:00:00Z"
+        entries = [
+            None,
+            {"id": 1, "title": 99},
+            {
+                "id": 2, "title": "Remote Engineer",
+                "publishedAt": published, "applyUrl": URL, "isRemote": True,
+            },
+            {
+                "id": 3, "title": "Engineering Manager",
+                "publishedAt": published, "applyUrl": URL, "isRemote": True,
+            },
+            {
+                "id": 4, "title": "Remote Engineer",
+                "publishedAt": published, "applyUrl": URL,
+                "isRemote": True, "location": 19,
+            },
+            {
+                "id": 5, "title": "Remote Engineer",
+                "publishedAt": 123, "applyUrl": URL, "isRemote": True,
+            },
+        ]
+
+        def loader(url):
+            if "ashbyhq" in url:
+                return {"jobs": entries}
+            return {"jobs": "incorrect feed shape"}
+
+        result = collect(
+            [
+                {"ats": "greenhouse", "board": "broken"},
+                {"ats": "ashby", "board": "fixture"},
+            ],
+            clock=current,
+            loader=loader,
+            exclude_title_pattern=r"manager",
+        )
+        self.assertEqual([job["role"] for job in result["jobs"]], ["Remote Engineer"])
+        self.assertFalse(result["jobs"][0]["eligibility"]["verified"])
+        self.assertGreaterEqual(len(result["errors"]), 4)
+        self.assertTrue(any(e["board"] == "broken" for e in result["errors"]))
+        self.assertTrue(any(e.get("job_id") == 4 for e in result["errors"]))
+
+    def test_discovery_rejects_invalid_filters_and_naive_clock(self):
+        with self.assertRaisesRegex(ValueError, "title filter"):
+            collect([], title_pattern="[")
+        with self.assertRaisesRegex(ValueError, "title filter"):
+            collect([], exclude_title_pattern="[")
+        with self.assertRaisesRegex(ValueError, "time zone"):
+            collect([], clock=dt.datetime(2026, 11, 10))
+
+    def test_discovery_feed_has_bounded_no_redirect_transport(self):
+        import io
+
+        from jobs_gpt.discovery import MAX_FEED_BYTES, fetch
+
+        with patch(
+            "jobs_gpt.discovery.open_no_redirect",
+            return_value=io.BytesIO(b"x" * (MAX_FEED_BYTES + 1)),
+        ) as opener:
+            with self.assertRaisesRegex(ValueError, "8 MiB"):
+                fetch("https://api.ashbyhq.com/posting-api/job-board/fixture")
+        self.assertEqual(opener.call_count, 1)
+        self.assertEqual(opener.call_args.kwargs["timeout"], 30)
+
+    def test_discover_cli_writes_private_outputs_and_refuses_git_checkout(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from jobs_gpt.cli import main
+
+        boards = self.root / "boards.json"
+        boards.write_text("[]")
+        output = self.root / "discovery" / "jobs.json"
+        response = {
+            "jobs": [{"company": "Fixture Employer", "role": "Remote Engineer",
+                      "url": URL, "eligibility": {"verified": False}}],
+            "errors": [],
+            "cutoff": "2026-11-01T00:00:00+00:00",
+            "checked_at": "2026-11-10T00:00:00+00:00",
+        }
+        with patch("jobs_gpt.discovery.collect", return_value=response) as loader:
+            with redirect_stdout(io.StringIO()):
+                main([
+                    "discover", "--boards", str(boards),
+                    "--exclude-title", "manager|director", "--output", str(output),
+                ])
+            self.assertEqual(
+                loader.call_args.kwargs["exclude_title_pattern"], "manager|director"
+            )
+            self.assertEqual(json.loads(output.read_text()), response["jobs"])
+            self.assertEqual(
+                json.loads(Path(str(output) + ".audit.json").read_text())["errors"], []
+            )
+            import os
+            if os.name != "nt":
+                self.assertEqual(output.parent.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            repo = self.root / "checkout"
+            repo.mkdir()
+            (repo / ".git").mkdir()
+            with self.assertRaises(SystemExit) as captured:
+                main([
+                    "discover", "--boards", str(boards),
+                    "--output", str(repo / "jobs.json"),
+                ])
+            self.assertEqual(captured.exception.code, 2)
+            self.assertFalse((repo / "jobs.json").exists())
+
     def test_gemini_inline_pdf_and_secret_transport(self):
         seen = {}
 
