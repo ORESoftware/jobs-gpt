@@ -2,6 +2,7 @@
 
 import json
 import os
+import secrets
 import sqlite3
 from contextlib import contextmanager
 
@@ -60,6 +61,13 @@ class Store:
 
     def put(self, key, payload, event="updated"):
         payload = dict(payload, updated_at=now())
+        # Fresh, unpredictable CAS token for *every* ready-state write.
+        # Timestamps only have second precision and cannot prevent a stale
+        # controller from claiming another controller's newer ready record.
+        if payload["status"] == "ready":
+            payload["_ready_revision"] = secrets.token_hex(16)
+        else:
+            payload.pop("_ready_revision", None)
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute(
@@ -97,13 +105,24 @@ class Store:
         return payload
 
     def begin_attempt(self, key, payload):
-        """Atomic compare-and-set: two workers cannot both obtain permission to click."""
+        """Claim only the exact ready snapshot that passed final form checks."""
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute(
-                "SELECT status FROM applications WHERE job_key=?", (key,)
+                "SELECT status,payload FROM applications WHERE job_key=?", (key,)
             ).fetchone()
             if not row or row[0] not in ALLOWED_ATTEMPTS:
+                return False
+            prior = json.loads(row[1])
+            revision = payload.get("_ready_revision")
+            if (
+                not isinstance(revision, str)
+                or not revision
+                or revision != prior.get("_ready_revision")
+                or payload.get("job") != prior.get("job")
+            ):
+                # Another write replaced the ready record, or the caller
+                # never received the stored snapshot. Do not click.
                 return False
             value = dict(
                 payload, status="submitting", submit_attempt_at=now(), updated_at=now()
@@ -137,8 +156,10 @@ class Store:
                 raise ValueError(
                     "No recorded submission attempt or protected outcome to resolve"
                 )
-            if row[0] == "submitted" and payload["status"] != "submitted":
-                raise ValueError("Confirmed submissions cannot be downgraded")
+            if row[0] == "submitted":
+                # A saved employer receipt is immutable evidence. Even a second
+                # nominally "submitted" outcome must not replace that receipt.
+                raise ValueError("Confirmed submissions cannot be rewritten or downgraded")
             if payload["status"] == "submitted" and not evidence.get("receipt"):
                 raise ValueError("Confirmed outcome requires a receipt")
             prior = json.loads(row[1])
