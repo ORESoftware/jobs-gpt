@@ -62,7 +62,7 @@ jobs-gpt review-eligibility --jobs /private/jobs.json --profile /private/profile
   --source-url 'https://the.actual.job/posting' --reviewer 'Reviewer'
 ```
 
-This records your review; it does not perform or certify the reasoning for you. Old eligibility entries missing the job/PDF bindings need a fresh review.
+This records your review; it does not perform or certify the reasoning for you. The `source_url` must identify the **same direct HTTPS ATS posting** as the job URL; a generic employer page or another posting is not accepted as eligibility evidence. Existing reviews with mismatched URLs require fresh review. Old eligibility entries missing the job/PDF bindings need a fresh review.
 
 Eligibility reviews expire after 24 hours and are invalidated by profile changes. The script checks review completeness/freshness, not the reviewer's reasoning. A competent human or agent must actually verify the evidence. Jobs remain open when eligibility is unverified. JSON jobs require `company`, `role`, `url`; the other discovery fields are evidence for that review.
 
@@ -129,7 +129,7 @@ Invoke `$job-applications` to operate applications, or `$jobs-gpt-maintenance` t
 
 See [hardening findings and validation](docs/HARDENING.md) for the audit scope and remaining limits.
 
-Private data belongs outside Git. Private runtime inputs and outputs are rejected inside Git checkouts. New workspaces use mode 0700 and the ledger, answer bank and metadata use 0600 on POSIX systems. Existing permissive workspaces must be corrected explicitly; the script never changes permissions of an arbitrary existing parent directory. JSON updates use a temporary file and atomic replacement, so a failed write preserves the previous record.  The ignore rules are a second line of defense, not a substitute for inspecting `git diff --cached` before publishing. Reports and screenshots contain personal information. This repository intentionally contains no applicant profile, résumé, key, browser storage or live application ledger.
+Private data belongs outside Git. Private runtime inputs and outputs are rejected inside Git checkouts. New workspaces and private-output directories use mode 0700 and the ledger, answer bank and metadata use 0600 on POSIX systems. Writes to already-existing directories with group/other permissions are refused; correct their permissions explicitly before writing. The script never silently changes permissions of an arbitrary existing directory. The skill installer creates each skill directory with private permissions before writing local runtime hints; older permissive installations must be corrected explicitly. JSON updates use a temporary file and atomic replacement, so a failed write preserves the previous record.  The ignore rules are a second line of defense, not a substitute for inspecting `git diff --cached` before publishing. Reports and screenshots contain personal information. This repository intentionally contains no applicant profile, résumé, key, browser storage or live application ledger.
 
 ## Upstream references
 

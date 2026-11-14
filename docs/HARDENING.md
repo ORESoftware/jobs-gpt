@@ -36,3 +36,9 @@ The skill-creator validator checks skill metadata. Independent forward tests use
 - Private files contain applicant information. Keep one durable workspace per applicant. Independent workspaces cannot deduplicate each other, and local filesystem access by the same user is outside the integrity guarantees.
 - The browser runs in the background on macOS. Other desktops control their own focus policy. Do not use native activation to work around a blocked form.
 - No image CAPTCHA solving, employer limit evasion, or unverified screening defaults are provided. A maintenance task does not authorize new applications.
+
+## Follow-up hardening — 2026-11-14
+
+- **Private output directories:** Mode 0700 is required for both newly created and pre-existing POSIX directories used for applicant artifacts, including skill runtime hints. Existing shared directories are rejected rather than silently chmod'ed. Files remain atomically replaced with private temporary files.
+- **Eligibility source identity:** Both `review-eligibility` and submission-time `eligibility_issues` require the evidence URL to resolve to the *same* direct HTTPS ATS board/posting identity as the intended job. A generic employer site or unrelated posting cannot be used to bless another job. Older review entries with mismatched sources require a fresh manual review.
+- **Offline regressions:** Test permissive-directory rejection and correction, wrong ATS/job/source URLs, rejected CLI review without modifying the jobs file, and safe behavior for pre-existing permissive skill destinations. No employer application or Gemini inference is performed.

@@ -82,7 +82,7 @@ class StorageHardeningTests(Workspace):
 
     def test_endpoint_reuse_requires_same_browser_identity(self):
         root = self.root / "browser"
-        root.mkdir()
+        root.mkdir(mode=0o700)
         write_private(
             root / "browser.json",
             {
@@ -164,6 +164,75 @@ class StorageHardeningTests(Workspace):
         self.assertTrue(json.loads(output.getvalue())["ok"])
         self.assertNotIn("applicant@example.org", output.getvalue())
 
+    def test_private_write_rejects_world_readable_directory(self):
+        if os.name == "nt":
+            self.skipTest("POSIX permissions")
+        shared = self.root / "shared"
+        shared.mkdir(mode=0o755)
+        shared.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, "permissions 0700"):
+            write_private(shared / "answers.json", {"private": "synthetic"})
+        self.assertFalse((shared / "answers.json").exists())
+        shared.chmod(0o700)
+        write_private(shared / "answers.json", {"private": "synthetic"})
+        self.assertEqual(
+            json.loads((shared / "answers.json").read_text()),
+            {"private": "synthetic"},
+        )
+
+    def test_eligibility_source_url_must_be_exact_job(self):
+        good = dict(self.job, eligibility=dict(self.job["eligibility"]))
+        self.assertEqual(eligibility_issues(good, self.profile), [])
+        for bad_url in (
+            URL.replace("89abc", "89abd"),
+            "https://jobs.lever.co/other/12345678-1234-1234-1234-123456789abc",
+            "https://employer.example/careers/another-position",
+            "http://jobs.ashbyhq.com/fixture/12345678-1234-1234-1234-123456789abc",
+            "https://user:password@jobs.ashbyhq.com/fixture/12345678-1234-1234-1234-123456789abc",
+        ):
+            with self.subTest(bad_url=bad_url):
+                bad = dict(self.job, eligibility=dict(self.job["eligibility"], source_url=bad_url))
+                self.assertIn(
+                    "Eligibility source URL must match",
+                    eligibility_issues(bad, self.profile)[0],
+                )
+
+    def test_review_cli_refuses_unrelated_evidence_source(self):
+        from jobs_gpt.cli import main
+
+        jobs = self.root / "review-jobs.json"
+        write_private(jobs, [dict(self.job, eligibility={"verified": False})])
+        with self.assertRaises(SystemExit) as captured:
+            main([
+                "review-eligibility",
+                "--jobs", str(jobs),
+                "--profile", str(self.profile_path),
+                "--job-key", job_key(self.job),
+                "--evidence", "Unrelated synthetic evidence",
+                "--source-url", URL.replace("89abc", "89abd"),
+                "--reviewer", "offline tester",
+            ])
+        self.assertEqual(captured.exception.code, 2)
+        self.assertFalse(json.loads(jobs.read_text())[0]["eligibility"]["verified"])
+
+    def test_installer_refuses_permissive_skill_destination(self):
+        if os.name == "nt":
+            self.skipTest("POSIX permissions")
+        import subprocess
+        import sys
+
+        script = Path(__file__).resolve().parents[1] / "scripts/install_skills.py"
+        destination = self.root / "skills" / "job-applications"
+        destination.mkdir(parents=True, mode=0o755)
+        destination.chmod(0o755)
+        proc = subprocess.run(
+            [sys.executable, str(script), "--destination", str(self.root / "skills")],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("permissions 0700", proc.stderr)
+        self.assertFalse((destination / "runtime.json").exists())
+
     def test_skill_refresh_preserves_custom_workspace(self):
         import subprocess
         import sys
@@ -179,6 +248,12 @@ class StorageHardeningTests(Workspace):
         for name in ("job-applications", "jobs-gpt-maintenance"):
             config = json.loads((destination / name / "runtime.json").read_text())
             self.assertEqual(config["workspace"], str(custom.resolve()))
+            if os.name != "nt":
+                self.assertEqual((destination / name).stat().st_mode & 0o777, 0o700)
+                self.assertEqual(
+                    (destination / name / "runtime.json").stat().st_mode & 0o777,
+                    0o600,
+                )
 
     def test_public_scan_checks_staged_blobs_including_ignored_files(self):
         import subprocess

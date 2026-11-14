@@ -138,6 +138,12 @@ def eligibility_issues(job, profile, max_age_hours=24):
         return ["Eligibility review needs reviewer, evidence and source URL"]
     if review.get("job_key") != job_key(job):
         return ["Eligibility review does not match the intended employer job"]
+    # Evidence from an unrelated posting must not authorize this application's
+    # submission, even when the review JSON was modified outside the CLI.
+    try:
+        assert_job_url(job, review["source_url"])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return ["Eligibility source URL must match the intended HTTPS ATS posting"]
     if review.get("resume_sha256") != profile["_resume_sha256"]:
         return ["Eligibility review does not match the current resume"]
     if review.get("profile_digest") != profile["_profile_digest"]:

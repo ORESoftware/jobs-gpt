@@ -88,25 +88,21 @@ def main(argv=None):
                 parser.exit(1)
             return
         if args.command == "review-eligibility":
-            from urllib.parse import urlparse
-
-            from .models import now
+            from .models import assert_job_url, now
 
             profile = read_profile(args.profile)
             jobs = read_jobs(args.jobs)
             job = next((j for j in jobs if job_key(j) == args.job_key), None)
             if not job or not args.evidence.strip() or not args.reviewer.strip():
                 raise ValueError("Matching job, evidence and reviewer are required")
-            source = urlparse(args.source_url)
-            if (
-                source.scheme != "https"
-                or not source.hostname
-                or source.username
-                or source.password
-            ):
+            # An HTTPS URL to some other role or domain is not evidence for
+            # the specific ATS posting that this command will authorize.
+            try:
+                assert_job_url(job, args.source_url)
+            except ValueError:
                 raise ValueError(
-                    "Eligibility evidence needs an HTTPS employer source URL"
-                )
+                    "Eligibility evidence needs the same direct HTTPS ATS posting URL"
+                ) from None
             job["eligibility"] = {
                 "verified": True,
                 "job_key": job_key(job),
