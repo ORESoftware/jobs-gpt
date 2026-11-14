@@ -281,6 +281,9 @@ def process(context, store, job, profile, bank, submit=False, model=None):
         record["screenshot_before"] = screenshot(page, store, key, "before")
         # Recheck every gate immediately before intent. No final-button heuristics or AI clicks.
         assert_job_url(job, page.url)
+        # Embedded forms can change their job identity after initial discovery.
+        # Check the selected frame again before recording an irreversible intent.
+        assert_job_url(job, scope.url)
         final = forms.blockers(
             scope,
             revalidate(scope, profile, answers, job) + upload_verified(scope, profile),
@@ -306,6 +309,10 @@ def process(context, store, job, profile, bank, submit=False, model=None):
             visible[0].click(timeout=10000)
             receipt = forms.confirmation_after(scope, before)
             if receipt:
+                # A receipt shown after navigating to another posting (or site)
+                # is not proof that the intended employer accepted this job.
+                assert_job_url(job, page.url)
+                assert_job_url(job, scope.url)
                 record.update(
                     status="submitted",
                     confirmation=receipt,
