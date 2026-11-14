@@ -50,3 +50,9 @@ The skill-creator validator checks skill metadata. Independent forward tests use
 - **Filtering feature:** `discover --exclude-title REGEX` filters unwanted titles after the positive `--title` filter. Both regular expressions are case-insensitive; invalid expressions fail early with an actionable error.
 - **Private discovery outputs:** The candidate JSON and its audit file use atomic private writes outside Git checkouts, preventing a later eligibility-review update from publishing applicant-linked data. Existing insecure output directories require explicit correction.
 - **Regression evidence:** Synthetic feed/CLI tests cover malformed entries and boards, source filtering, response-size limits, invalid regex/timezone, and private output permissions. No real employer applications or paid inference.
+
+## Privacy-safe reconciliation diagnostics — 2026-11-14
+
+- **Operator status view:** `report --summary` prints or privately writes counts only, including total jobs, confirmed submissions and protected unresolved states. It deliberately does not serialize job URLs, applicant facts, drafts, screenshots or receipt evidence.
+- **Read-only health diagnostics:** `doctor` now includes `ledger.protected_unresolved` so an operator can find uncertain or blocked outcomes without resetting the ledger. Protected states are not incorrectly reported as database corruption.
+- **Compatibility and tests:** Full `report` retains its existing private detailed output. Synthetic tests cover data minimization, private 0600 summary output and protected-outcome counts. No test sends a real application or paid inference.

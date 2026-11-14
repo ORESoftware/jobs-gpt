@@ -233,6 +233,73 @@ class StorageHardeningTests(Workspace):
         self.assertIn("permissions 0700", proc.stderr)
         self.assertFalse((destination / "runtime.json").exists())
 
+    def test_summary_report_never_discloses_applicant_data(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from jobs_gpt.cli import main
+
+        secret = "synthetic-private-applicant@sample.test"
+        key = job_key(self.job)
+        self.store.put(
+            key,
+            {"status": "needs_review", "job": self.job, "private_email": secret},
+        )
+        self.store.import_record(
+            "synthetic:other:posting",
+            {"status": "unconfirmed", "private_email": secret},
+        )
+        args = ["--workspace", str(self.store.root), "report"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            main(args + ["--summary"])
+        data = json.loads(out.getvalue())
+        self.assertEqual(data["counts"], {"needs_review": 1, "unconfirmed": 1})
+        self.assertEqual(data["total_jobs"], 2)
+        self.assertEqual(data["confirmed_submissions"], 0)
+        self.assertEqual(data["protected_unresolved"], 1)
+        self.assertNotIn(secret, out.getvalue())
+        self.assertNotIn(URL, out.getvalue())
+
+        # Full report remains explicitly available for private, detailed review.
+        out = io.StringIO()
+        with redirect_stdout(out):
+            main(args)
+        self.assertIn(secret, out.getvalue())
+
+    def test_summary_output_remains_private_and_atomic(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from jobs_gpt.cli import main
+
+        self.store.put(job_key(self.job), {"status": "ready", "job": self.job})
+        output = self.root / "summary-output" / "counts.json"
+        with redirect_stdout(io.StringIO()):
+            main([
+                "--workspace", str(self.store.root), "report",
+                "--summary", "--output", str(output),
+            ])
+        report = json.loads(output.read_text())
+        self.assertEqual(report["counts"], {"ready": 1})
+        self.assertNotIn("applications", report)
+        if os.name != "nt":
+            self.assertEqual(output.parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_doctor_summarizes_protected_outcomes_without_marking_corruption(self):
+        from jobs_gpt.checks import doctor
+
+        self.store.put(job_key(self.job), {"status": "ready", "job": self.job})
+        self.store.import_record(
+            "synthetic:other:posting",
+            {"status": "unconfirmed", "private": "synthetic"},
+        )
+        result = doctor(self.store.root)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["ledger"]["records"], 2)
+        self.assertEqual(result["ledger"]["protected_unresolved"], 1)
+
     def test_skill_refresh_preserves_custom_workspace(self):
         import subprocess
         import sys

@@ -73,8 +73,11 @@ Set `GEMINI_API_KEY` and `GEMINI_MODEL` in the local process environment (or obt
 
 ```bash
 jobs-gpt --workspace /private/state run --jobs /private/jobs.json --profile /private/profile.json --ai --model YOUR_MODEL
+jobs-gpt --workspace /private/state report --summary
 jobs-gpt --workspace /private/state report --output /private/report.json
 ```
+
+Use `report --summary` for a privacy-preserving overview with status counts, confirmed submissions, and protected unresolved outcomes requiring inspection. It does not include job details or applicant data. Plain `report` and `report --output` retain the full private evidence-rich records; do not paste them into public logs. `doctor` also reports protected unresolved records without treating them as database corruption.
 
 Gemini receives the actual PDF, applicant profile, job identity and visible form context. API calls use an API-key header, structured JSON, bounded retries, and a PDF size limit. Inference failures leave the form blocked. Model answers are saved as drafts; the model cannot mark its own answer verified or control the browser.
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .models import job_key, read_jobs, read_json, read_profile, validate_real_applicant
 from .privacy import private_path, write_private
-from .state import Store, workspace_lock
+from .state import STOP, Store, workspace_lock
 
 
 def main(argv=None):
@@ -62,6 +62,11 @@ def main(argv=None):
         approve.add_argument("--" + name, required=True)
     report = sub.add_parser("report")
     report.add_argument("--output")
+    report.add_argument(
+        "--summary",
+        action="store_true",
+        help="Only status counts; do not display applicant or job details",
+    )
     migrate = sub.add_parser(
         "import-legacy",
         help="Preserve prior receipts/uncertainty from a private pilot ledger",
@@ -179,10 +184,20 @@ def main(argv=None):
         store = Store(args.workspace)
         if args.command == "report":
             records = store.all()
-            report = {
-                "counts": dict(Counter(r["status"] for r in records.values())),
-                "applications": records,
-            }
+            counts = dict(Counter(r["status"] for r in records.values()))
+            if args.summary:
+                # Safe for terminal use: no employer URLs, applicant facts, drafts
+                # or evidence paths are included in this summary.
+                report = {
+                    "counts": counts,
+                    "total_jobs": len(records),
+                    "confirmed_submissions": counts.get("submitted", 0),
+                    "protected_unresolved": sum(
+                        counts.get(status, 0) for status in STOP - {"submitted"}
+                    ),
+                }
+            else:
+                report = {"counts": counts, "applications": records}
             output = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
             if args.output:
                 write_private(args.output, report)

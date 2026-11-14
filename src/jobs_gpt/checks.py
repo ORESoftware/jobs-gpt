@@ -9,6 +9,7 @@ from importlib.metadata import version
 
 from .models import read_profile
 from .privacy import private_path
+from .state import STOP
 
 
 def doctor(workspace, profile=None, check_browser=False):
@@ -51,10 +52,14 @@ def doctor(workspace, profile=None, check_browser=False):
                     errors.append(
                         "A submitted record lacks receipt evidence; reconcile manually"
                     )
+            counts = dict(Counter(row[1] for row in rows))
             result["ledger"] = {
                 "integrity": integrity,
                 "records": len(rows),
-                "counts": dict(Counter(row[1] for row in rows)),
+                "counts": counts,
+                "protected_unresolved": sum(
+                    counts.get(status, 0) for status in STOP - {"submitted"}
+                ),
             }
         finally:
             con.close()
